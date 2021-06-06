@@ -5,6 +5,7 @@
   <title>2D mass-spring system</title>
 
 </head>
+	<script src="../js/script.js" ></script>
     <script src="../js/pixi.min.js" ></script>
     <script src="../js/dat.gui.js" ></script>
     <script src="../js/stats.js" ></script>
@@ -17,6 +18,41 @@
 <body>
   <div id="Stats-output"></div>
   <script type="text/javascript">
+var audioValue;
+let mystatus = document.getElementById('status')
+  let audioContext = new (window.AudioContext || window.webkitAudioContext)()
+  let mediaStreamSource = null
+  let scriptProcessor = null
+
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    // 获取用户的 media 信息
+    navigator.mediaDevices.getUserMedia({audio: true}).then((stream) => {
+      // 将麦克风的声音输入这个对象
+      mediaStreamSource = audioContext.createMediaStreamSource(stream) 
+      // 创建一个音频分析对象，采样的缓冲区大小为4096，输入和输出都是单声道
+      scriptProcessor = audioContext.createScriptProcessor(4096,1,1) 
+      // 将该分析对象与麦克风音频进行连接
+      mediaStreamSource.connect(scriptProcessor) 
+      // 此举无甚效果，仅仅是因为解决 Chrome 自身的 bug
+      scriptProcessor.connect(audioContext.destination)
+
+      // 开始处理音频
+      scriptProcessor.onaudioprocess = function(e) {
+        // 获得缓冲区的输入音频，转换为包含了PCM通道数据的32位浮点数组
+        let buffer = e.inputBuffer.getChannelData(0)
+        // 获取缓冲区中最大的音量值
+        let maxVal = Math.max.apply(Math, buffer)
+        // 显示音量值
+        audioValue = Math.round(maxVal * 5000);
+        
+      };
+    }).catch((error) => {
+      
+    })
+  } else {
+    mystatus.innerHTML = '不支持获取媒体接口'
+  }
+
 
 function initStats() {
    var stats = new Stats();
@@ -87,6 +123,9 @@ Vector2.prototype = {
 
 }
 
+//坐标系是怎样的？
+
+
 let kRecovery = 1;
 
 let gravity = new Vector2(0, 9.8);
@@ -99,6 +138,57 @@ let timeIntervalOfSeconds = 0.02;
 let startCircleNum = 0;
 
 let allCircle = new Array();
+
+let WindPoint = function(origin, radius, direction1, direction2, k){
+	this.origin = origin;
+	this.radius = radius;
+	this.direction1 = direction1;
+	this.direction2 = direction2;
+	this.k = k;
+}
+
+WindPoint.prototype = {
+	//判断质点是否在风场内
+	isInWindField : function(point){
+		point = point.position;
+
+		//首先判断质点是否落在圆内
+		var squareDis = (point.x-this.origin.x) * (point.x-this.origin.x) + (point.y-this.origin.y) * (point.y-this.origin.y);
+		
+		if(squareDis <= this.radius * this.radius){
+			//如果落在圆内，则进一步判断是否落在扇形内
+			
+			var tempVector = new Vector2(point.x - this.origin.x, point.y - this.origin.y);
+			var a = tempVector.cross(this.direction1);
+			var b = tempVector.cross(this.direction2);
+			if(a*b < 0){
+				return true;
+			}
+		}
+
+		return false;
+
+	},
+
+	calculateWindValue : function(point){
+
+		point  = point.position;
+		var dis = Math.sqrt((point.x-this.origin.x) * (point.x-this.origin.x) + (point.y-this.origin.y) * (point.y-this.origin.y));
+
+		var tempVector = new Vector2(point.x - this.origin.x, point.y - this.origin.y);
+		tempVector.x *= this.k;
+		tempVector.y *= this.k;
+		return tempVector;
+	}
+
+}
+
+var origin = new Vector2(500, 500);
+var direction1 = new Vector2(1, 1);
+var direction2 = new Vector2(1, -1);
+var k = 0.5;
+var windPoint1 = new WindPoint(origin, 200, direction1, direction2, k);
+
 
 let circles = function(x, y, r) {
     this.position = new Vector2(x, y);
@@ -113,6 +203,7 @@ let circles = function(x, y, r) {
     this.isFixed = false;
 
 }
+
 
 circles.prototype = {
 
@@ -165,14 +256,25 @@ function setSpring(circle,allCircle, edgeHead) {
          
           if(circle.position.squareDis(allCircle[i].position) <= 5000) {
               //弹簧连接
-              //alert("tanhuang lianjie")
 
               addNodeToEdgeList(edgeHead, circle.num, allCircle[i].num);
               createLine(line, circle.position.x, circle.position.y, allCircle[i].position.x, allCircle[i].position.y);
 
-              //alert(2222)
+             
           }
        }
+    }
+}
+
+//当触发耳机麦克风事件时调用此函数
+function accumulateWindForces(allCircle){
+	 let length = allCircle.length;
+    for(let i = 0; i < length; ++i) {
+       if(windPoint1.isInWindField(allCircle[i]) == true) {
+       	  var f = windPoint1.calculateWindValue(allCircle[i]);
+       	  allCircle[i].forces = allCircle[i].forces.add(f);
+       }
+       
     }
 }
 
@@ -220,8 +322,9 @@ function accumulateDampingForce(edgeHead, allCircle) {
 function updateForce(edgeHead, allCircle) {
     accumulateGravity(allCircle);
     accumulateSpringForce(edgeHead, allCircle);
-    accumulateDampingForce(edgeHead, allCircle)
-
+    accumulateDampingForce(edgeHead, allCircle);
+  
+    accumulateWindForces(allCircle);
 }
 
 function clearForce(allCircle) {
@@ -281,6 +384,7 @@ let halfOfWidth  = width  / 2;
 
 let line = new Array();
 
+
 function createLine(line, x1, y1, x2, y2) {
    let length = line.length;
    line[length] = new PIXI.Graphics();
@@ -324,12 +428,35 @@ var controls = new function () {
     this.timeIntervalOfSeconds = 0.02;
 };
 
+
+//绘制风场位置
+var wwinds = new PIXI.Graphics();
+wwinds.beginFill(0xFF8033);
+wwinds.drawCircle(0, 0, 9);
+wwinds.x = 500;
+wwinds.y = 500;
+wwinds.r = 10
+wwinds.endFill();
+app.stage.addChild(wwinds);
+
+
+render();
+var fixed_x = 500;
+var fixed_y = 200;
+let node = new circles(fixed_x, fixed_y, 4);
+node.isFixed = true;
+node.drawElement();
+allCircle.push(node);
+setSpring(node,allCircle, edgeHead);
+
 function render() {
 
   stats.update();
 
   clearLine(line);
   clearForce(allCircle);
+  
+  windPoint1.k = audioValue;
 
   update(edgeHead, allCircle, timeIntervalOfSeconds);
   reDrawLine(edgeHead, allCircle, line);
@@ -342,7 +469,6 @@ function render() {
 }
 
 
-render();
 
 
 var gui = new dat.GUI();
@@ -372,11 +498,6 @@ document.onmousedown=function (ev){
       setSpring(node,allCircle, edgeHead);
    }
 
-}
-
-var orientation = window.orientation;
-if(orientation == 0) {
-  alert("请切换为横屏模式并刷新浏览器");
 }
 
 window.ontouchstart = function(event) {
@@ -409,3 +530,6 @@ document.addEventListener('touchstart', function() {
   </script>
 </body>
 </html>
+
+
+
